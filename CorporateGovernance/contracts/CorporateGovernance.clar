@@ -256,4 +256,73 @@
 (define-read-only (get-total-voting-power)
   (var-get total-voting-power))
 
+;; Advanced Proposal Management and Execution System
+;; This comprehensive function handles proposal finalization, result calculation,
+;; automatic execution, and detailed governance compliance verification
+(define-public (finalize-and-execute-proposal (proposal-id uint))
+  (match (map-get? proposals proposal-id)
+    proposal 
+    (let ((total-votes (+ (+ (get yes-votes proposal) (get no-votes proposal)) (get abstain-votes proposal)))
+          (voting-power-used (+ (get yes-votes proposal) (get no-votes proposal)))
+          (yes-percentage (if (> voting-power-used u0) 
+                           (/ (* (get yes-votes proposal) u100) voting-power-used) 
+                           u0))
+          (participation-rate (if (> (get total-eligible-votes proposal) u0)
+                               (/ (* total-votes u100) (get total-eligible-votes proposal))
+                               u0))
+          (custom-quorum (get minimum-quorum proposal))
+          (proposal-type-info (default-to {name: u"DEFAULT", required-majority: u50} 
+                               (map-get? proposal-types (get proposal-type proposal))))
+          (required-majority (get required-majority proposal-type-info))
+          (quorum-met (>= participation-rate custom-quorum))
+          (majority-achieved (>= yes-percentage required-majority))
+          (voting-ended (> block-height (get end-block proposal)))
+          (super-majority-achieved (>= yes-percentage u67)) ;; Two-thirds majority
+          (unanimous-decision (and (> (get yes-votes proposal) u0) 
+                                  (is-eq (get no-votes proposal) u0))))
+      (begin
+        ;; Comprehensive validation checks
+        (asserts! (is-contract-active) (err u112))
+        (asserts! voting-ended ERR-VOTING-CLOSED)
+        (asserts! (not (get executed proposal)) ERR-ALREADY-EXECUTED)
+        (asserts! (or (is-eq tx-sender (get creator proposal)) 
+                     (is-eq tx-sender CONTRACT-OWNER)) ERR-UNAUTHORIZED)
+        
+        ;; Mark proposal as executed to prevent re-execution
+        (map-set proposals proposal-id (merge proposal {executed: true}))
+        
+        ;; Record finalization action in audit trail
+        (record-voting-action tx-sender proposal-id u"FINALIZED")
+        
+        ;; Calculate final governance decision
+        (let ((final-decision (and quorum-met majority-achieved))
+              (decision-strength (if unanimous-decision u"UNANIMOUS"
+                                   (if super-majority-achieved u"SUPER_MAJORITY"
+                                     (if majority-achieved u"SIMPLE_MAJORITY" u"FAILED")))))
+          
+          ;; Return comprehensive governance analysis and results
+          (ok {
+            proposal-id: proposal-id,
+            passed: final-decision,
+            decision-strength: decision-strength,
+            yes-votes: (get yes-votes proposal),
+            no-votes: (get no-votes proposal),
+            abstain-votes: (get abstain-votes proposal),
+            total-votes: total-votes,
+            voting-power-used: voting-power-used,
+            yes-percentage: yes-percentage,
+            participation-rate: participation-rate,
+            quorum-met: quorum-met,
+            required-quorum: custom-quorum,
+            majority-achieved: majority-achieved,
+            required-majority: required-majority,
+            super-majority: super-majority-achieved,
+            unanimous: unanimous-decision,
+            total-eligible: (get total-eligible-votes proposal),
+            execution-block: block-height,
+            proposal-type: (get name proposal-type-info),
+            governance-compliant: final-decision
+          }))))
+    ERR-PROPOSAL-NOT-FOUND))
+
 
